@@ -36,6 +36,7 @@ pub mod prelude {
     #[cfg(feature = "bevy_asset")]
     pub use crate::generator::{NavmeshGenerator, NavmeshReady};
     pub use crate::{Navmesh, NavmeshApp as _, NavmeshSettings};
+    pub use crate::mesh::ExcludeMeshFromNavmesh;
 }
 
 /// The main plugin of the crate. Adds functionality for creating and managing navmeshes.
