@@ -35,6 +35,8 @@ use serde::{Deserialize, Serialize};
 pub mod prelude {
     #[cfg(feature = "bevy_asset")]
     pub use crate::generator::{NavmeshGenerator, NavmeshReady};
+    #[cfg(feature = "bevy_mesh")]
+    pub use crate::mesh::ExcludeMeshFromNavmesh;
     pub use crate::{Navmesh, NavmeshApp as _, NavmeshSettings};
 }
 
