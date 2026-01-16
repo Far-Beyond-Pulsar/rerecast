@@ -10,6 +10,9 @@
 
 use alloc::vec::Vec;
 
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
+
 use crate::{
     CompactHeightfield,
     math::{dir_offset_x, dir_offset_z},
@@ -29,31 +32,79 @@ impl CompactHeightfield {
         let mut distance_field = vec![u16::MAX; self.spans.len()];
 
         // Mark boundary cells.
-        for z in 0..self.height {
-            for x in 0..self.width {
-                let cell = self.cell_at(x, z);
-                let max_index = cell.index() as usize + cell.count() as usize;
-                #[expect(
-                    clippy::needless_range_loop,
-                    reason = "lol the alternative suggestion is really unreadable"
-                )]
-                for i in cell.index() as usize..max_index {
-                    let span = &self.spans[i];
-                    let area = self.areas[i];
+        #[cfg(feature = "parallel")]
+        {
+            // Parallel boundary marking
+            let coords: Vec<(u16, u16)> = (0..self.height)
+                .flat_map(|z| (0..self.width).map(move |x| (z, x)))
+                .collect();
 
-                    let mut connection_count = 0;
-                    for dir in 0..4 {
-                        if let Some(con) = span.con(dir) {
-                            let a_x = (x as i32 + dir_offset_x(dir) as i32) as u16;
-                            let a_z = (z as i32 + dir_offset_z(dir) as i32) as u16;
-                            let a_index = self.cell_at(a_x, a_z).index() as usize + con as usize;
-                            if area == self.areas[a_index] {
-                                connection_count += 1;
+            let boundary_marks: Vec<usize> = coords
+                .par_iter()
+                .flat_map(|&(z, x)| {
+                    let cell = self.cell_at(x, z);
+                    let max_index = cell.index() as usize + cell.count() as usize;
+                    (cell.index() as usize..max_index)
+                        .filter_map(|i| {
+                            let span = &self.spans[i];
+                            let area = self.areas[i];
+
+                            let mut connection_count = 0;
+                            for dir in 0..4 {
+                                if let Some(con) = span.con(dir) {
+                                    let a_x = (x as i32 + dir_offset_x(dir) as i32) as u16;
+                                    let a_z = (z as i32 + dir_offset_z(dir) as i32) as u16;
+                                    let a_index =
+                                        self.cell_at(a_x, a_z).index() as usize + con as usize;
+                                    if area == self.areas[a_index] {
+                                        connection_count += 1;
+                                    }
+                                }
+                            }
+                            if connection_count < 4 {
+                                Some(i)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+
+            for i in boundary_marks {
+                distance_field[i] = 0;
+            }
+        }
+
+        #[cfg(not(feature = "parallel"))]
+        {
+            // Sequential boundary marking
+            for z in 0..self.height {
+                for x in 0..self.width {
+                    let cell = self.cell_at(x, z);
+                    let max_index = cell.index() as usize + cell.count() as usize;
+                    #[expect(
+                        clippy::needless_range_loop,
+                        reason = "lol the alternative suggestion is really unreadable"
+                    )]
+                    for i in cell.index() as usize..max_index {
+                        let span = &self.spans[i];
+                        let area = self.areas[i];
+
+                        let mut connection_count = 0;
+                        for dir in 0..4 {
+                            if let Some(con) = span.con(dir) {
+                                let a_x = (x as i32 + dir_offset_x(dir) as i32) as u16;
+                                let a_z = (z as i32 + dir_offset_z(dir) as i32) as u16;
+                                let a_index = self.cell_at(a_x, a_z).index() as usize + con as usize;
+                                if area == self.areas[a_index] {
+                                    connection_count += 1;
+                                }
                             }
                         }
-                    }
-                    if connection_count < 4 {
-                        distance_field[i] = 0;
+                        if connection_count < 4 {
+                            distance_field[i] = 0;
+                        }
                     }
                 }
             }
@@ -154,44 +205,106 @@ impl CompactHeightfield {
         let threshold = threshold.saturating_mul(2);
         let mut result = vec![0; distance_field.len()];
 
-        for z in 0..self.height {
-            for x in 0..self.width {
-                let cell = self.cell_at(x, z);
-                let max_index = cell.index() as usize + cell.count() as usize;
-                for i in cell.index() as usize..max_index {
-                    let span = &self.spans[i];
-                    let cd = distance_field[i];
-                    if cd <= threshold {
-                        result[i] = cd;
-                        continue;
-                    }
-                    let mut d = cd as u32;
-                    for dir in 0..4 {
-                        if let Some(con) = span.con(dir) {
-                            let a_x = (x as i32 + dir_offset_x(dir) as i32) as u16;
-                            let a_z = (z as i32 + dir_offset_z(dir) as i32) as u16;
-                            let a_index = self.cell_at(a_x, a_z).index() as usize + con as usize;
-                            d += distance_field[a_index] as u32;
+        #[cfg(feature = "parallel")]
+        {
+            // Parallel version: Process cells in parallel
+            // Collect all (z, x) pairs to iterate over
+            let coords: Vec<(u16, u16)> = (0..self.height)
+                .flat_map(|z| (0..self.width).map(move |x| (z, x)))
+                .collect();
 
-                            let a_span = &self.spans[a_index];
-                            let dir2 = (dir + 1) & 0x3;
-                            if let Some(con) = a_span.con(dir2) {
-                                let b_x = (a_x as i32 + dir_offset_x(dir2) as i32) as u16;
-                                let b_z = (a_z as i32 + dir_offset_z(dir2) as i32) as u16;
-                                let b_index =
-                                    self.cell_at(b_x, b_z).index() as usize + con as usize;
-                                d += distance_field[b_index] as u32;
-                            } else {
-                                d += cd as u32;
+            // Process cells in parallel and collect results
+            let cell_results: Vec<(usize, u16)> = coords
+                .par_iter()
+                .flat_map(|&(z, x)| {
+                    let cell = self.cell_at(x, z);
+                    let max_index = cell.index() as usize + cell.count() as usize;
+                    (cell.index() as usize..max_index)
+                        .map(|i| {
+                            let span = &self.spans[i];
+                            let cd = distance_field[i];
+                            if cd <= threshold {
+                                return (i, cd);
                             }
-                        } else {
-                            d += cd as u32 * 2;
+                            let mut d = cd as u32;
+                            for dir in 0..4 {
+                                if let Some(con) = span.con(dir) {
+                                    let a_x = (x as i32 + dir_offset_x(dir) as i32) as u16;
+                                    let a_z = (z as i32 + dir_offset_z(dir) as i32) as u16;
+                                    let a_index =
+                                        self.cell_at(a_x, a_z).index() as usize + con as usize;
+                                    d += distance_field[a_index] as u32;
+
+                                    let a_span = &self.spans[a_index];
+                                    let dir2 = (dir + 1) & 0x3;
+                                    if let Some(con) = a_span.con(dir2) {
+                                        let b_x = (a_x as i32 + dir_offset_x(dir2) as i32) as u16;
+                                        let b_z = (a_z as i32 + dir_offset_z(dir2) as i32) as u16;
+                                        let b_index =
+                                            self.cell_at(b_x, b_z).index() as usize + con as usize;
+                                        d += distance_field[b_index] as u32;
+                                    } else {
+                                        d += cd as u32;
+                                    }
+                                } else {
+                                    d += cd as u32 * 2;
+                                }
+                            }
+                            (i, ((d + 5) / 9) as u16)
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+
+            // Write results
+            for (i, value) in cell_results {
+                result[i] = value;
+            }
+        }
+
+        #[cfg(not(feature = "parallel"))]
+        {
+            // Sequential version (original code)
+            for z in 0..self.height {
+                for x in 0..self.width {
+                    let cell = self.cell_at(x, z);
+                    let max_index = cell.index() as usize + cell.count() as usize;
+                    for i in cell.index() as usize..max_index {
+                        let span = &self.spans[i];
+                        let cd = distance_field[i];
+                        if cd <= threshold {
+                            result[i] = cd;
+                            continue;
                         }
+                        let mut d = cd as u32;
+                        for dir in 0..4 {
+                            if let Some(con) = span.con(dir) {
+                                let a_x = (x as i32 + dir_offset_x(dir) as i32) as u16;
+                                let a_z = (z as i32 + dir_offset_z(dir) as i32) as u16;
+                                let a_index = self.cell_at(a_x, a_z).index() as usize + con as usize;
+                                d += distance_field[a_index] as u32;
+
+                                let a_span = &self.spans[a_index];
+                                let dir2 = (dir + 1) & 0x3;
+                                if let Some(con) = a_span.con(dir2) {
+                                    let b_x = (a_x as i32 + dir_offset_x(dir2) as i32) as u16;
+                                    let b_z = (a_z as i32 + dir_offset_z(dir2) as i32) as u16;
+                                    let b_index =
+                                        self.cell_at(b_x, b_z).index() as usize + con as usize;
+                                    d += distance_field[b_index] as u32;
+                                } else {
+                                    d += cd as u32;
+                                }
+                            } else {
+                                d += cd as u32 * 2;
+                            }
+                        }
+                        result[i] = ((d + 5) / 9) as u16;
                     }
-                    result[i] = ((d + 5) / 9) as u16;
                 }
             }
         }
+
         result
     }
 }
