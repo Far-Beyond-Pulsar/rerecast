@@ -1,16 +1,9 @@
-#[cfg(feature = "bevy_reflect")]
-use bevy_reflect::prelude::*;
 use core::ops::{Add, AddAssign};
 
 /// A region in a [`CompactHeightfield`](crate::compact_heightfield::CompactHeightfield).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize))]
 #[repr(transparent)]
-#[cfg_attr(feature = "bevy_reflect", derive(Reflect))]
-#[cfg_attr(
-    all(feature = "serialize", feature = "bevy_reflect"),
-    reflect(Serialize, Deserialize)
-)]
 pub struct RegionId(u16);
 bitflags::bitflags! {
     impl RegionId: u16 {

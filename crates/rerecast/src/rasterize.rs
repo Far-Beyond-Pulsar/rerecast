@@ -44,8 +44,8 @@ impl Heightfield {
             return Ok(());
         }
 
-        let inverse_cell_size = 1.0 / self.cell_size;
-        let inverse_cell_height = 1.0 / self.cell_height;
+        let inverse_cell_size = self.inverse_cell_size();
+        let inverse_cell_height = self.inverse_cell_height();
 
         let w = self.width as i32;
         let h = self.height as i32;

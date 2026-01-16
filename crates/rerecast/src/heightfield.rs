@@ -53,7 +53,7 @@ use crate::{
 ///     }
 /// }
 /// ```
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 #[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize))]
 pub struct Heightfield {
     /// The width of the heightfield along the x-axis in cell units
@@ -66,6 +66,12 @@ pub struct Heightfield {
     pub cell_size: f32,
     /// The size of each cell along the y-axis
     pub cell_height: f32,
+    /// Cached inverse of cell_size for faster division
+    #[cfg_attr(feature = "serialize", serde(skip))]
+    inverse_cell_size: f32,
+    /// Cached inverse of cell_height for faster division
+    #[cfg_attr(feature = "serialize", serde(skip))]
+    inverse_cell_height: f32,
     /// The indices to the spans in the heightfield in width*height order
     /// Each index corresponds to a column in the heightfield by pointing to the lowest span in the column
     pub spans: Vec<Option<SpanKey>>,
@@ -73,7 +79,43 @@ pub struct Heightfield {
     pub allocated_spans: Spans,
 }
 
+impl Default for Heightfield {
+    fn default() -> Self {
+        Self {
+            width: 0,
+            height: 0,
+            aabb: Aabb3d::default(),
+            cell_size: 1.0,
+            cell_height: 1.0,
+            inverse_cell_size: 1.0,
+            inverse_cell_height: 1.0,
+            spans: Vec::new(),
+            allocated_spans: Spans::default(),
+        }
+    }
+}
+
 impl Heightfield {
+    /// Ensures the cached inverse values are initialized correctly.
+    /// Call this after deserialization to recompute cached fields.
+    #[inline]
+    pub fn ensure_cache_initialized(&mut self) {
+        self.inverse_cell_size = 1.0 / self.cell_size;
+        self.inverse_cell_height = 1.0 / self.cell_height;
+    }
+
+    /// Returns the cached inverse of cell_size
+    #[inline]
+    pub(crate) fn inverse_cell_size(&self) -> f32 {
+        self.inverse_cell_size
+    }
+
+    /// Returns the cached inverse of cell_height
+    #[inline]
+    pub(crate) fn inverse_cell_height(&self) -> f32 {
+        self.inverse_cell_height
+    }
+
     /// Rasterizes the triangles of a [`TriMesh`] into a [`Heightfield`].
     ///
     /// # Arguments
@@ -272,6 +314,8 @@ impl HeightfieldBuilder {
             aabb: self.aabb,
             cell_size: self.cell_size,
             cell_height: self.cell_height,
+            inverse_cell_size: 1.0 / self.cell_size,
+            inverse_cell_height: 1.0 / self.cell_height,
             spans: vec![None; column_count],
             allocated_spans: Spans::with_min_capacity(column_count),
         })

@@ -1,15 +1,8 @@
-#[cfg(feature = "bevy_reflect")]
-use bevy_reflect::prelude::*;
 use glam::{U16Vec2, UVec3, Vec2, Vec3, Vec3A};
 
 /// A 3D axis-aligned bounding box
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 #[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "bevy_reflect", derive(Reflect))]
-#[cfg_attr(
-    all(feature = "serialize", feature = "bevy_reflect"),
-    reflect(Serialize, Deserialize)
-)]
 pub struct Aabb3d {
     /// The minimum point of the box
     pub min: Vec3,
@@ -172,6 +165,7 @@ pub(crate) fn next(i: usize, n: usize) -> usize {
     (i + 1) % n
 }
 
+#[inline]
 pub(crate) fn distance_squared_between_point_and_line_u16vec2(
     point: U16Vec2,
     (p, q): (U16Vec2, U16Vec2),
@@ -179,6 +173,7 @@ pub(crate) fn distance_squared_between_point_and_line_u16vec2(
     distance_squared_between_point_and_line_vec2(point.as_vec2(), (p.as_vec2(), q.as_vec2()))
 }
 
+#[inline]
 pub(crate) fn distance_squared_between_point_and_line_vec2(pt: Vec2, (p, q): (Vec2, Vec2)) -> f32 {
     let pq = q - p;
     let dt = pt - p;
@@ -197,6 +192,7 @@ pub(crate) fn distance_squared_between_point_and_line_vec2(pt: Vec2, (p, q): (Ve
     dt.length_squared()
 }
 
+#[inline]
 pub(crate) fn distance_squared_between_point_and_line_vec3(
     pt: Vec3A,
     (p, q): (Vec3A, Vec3A),
