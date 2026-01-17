@@ -17,6 +17,8 @@ struct BenchmarkData {
 #[derive(Debug)]
 struct BenchmarkResult {
     name: String,
+    group: String,
+    benchmark: String,
     time_s: f64,
     throughput: f64,
 }
@@ -61,21 +63,31 @@ fn find_criterion_dir() -> Result<PathBuf> {
 }
 
 fn parse_benchmark_results(criterion_dir: &Path) -> Result<Vec<BenchmarkResult>> {
-    let group_dir = criterion_dir.join("comparison_large_map");
-    if !group_dir.exists() {
-        anyhow::bail!("comparison_large_map group not found");
-    }
-
     let mut results = Vec::new();
     let triangles = 80_000.0;
 
-    for entry in fs::read_dir(&group_dir)? {
+    // Scan all benchmark groups
+    for entry in fs::read_dir(criterion_dir)? {
         let entry = entry?;
-        let path = entry.path();
-
-        if path.is_dir() {
-            let name = path.file_name().unwrap().to_str().unwrap().to_string();
-            let estimate_file = path.join("base/estimates.json");
+        let group_path = entry.path();
+        
+        if !group_path.is_dir() {
+            continue;
+        }
+        
+        let group_name = group_path.file_name().unwrap().to_str().unwrap().to_string();
+        
+        // Scan all benchmarks in this group
+        for bench_entry in fs::read_dir(&group_path)? {
+            let bench_entry = bench_entry?;
+            let bench_path = bench_entry.path();
+            
+            if !bench_path.is_dir() {
+                continue;
+            }
+            
+            let bench_name = bench_path.file_name().unwrap().to_str().unwrap().to_string();
+            let estimate_file = bench_path.join("base/estimates.json");
 
             if estimate_file.exists() {
                 let data = fs::read_to_string(&estimate_file)?;
@@ -85,7 +97,9 @@ fn parse_benchmark_results(criterion_dir: &Path) -> Result<Vec<BenchmarkResult>>
                 let throughput = (triangles / time_s) / 1000.0; // K tri/s
 
                 results.push(BenchmarkResult {
-                    name,
+                    name: format!("{}/{}", group_name, bench_name),
+                    group: group_name.clone(),
+                    benchmark: bench_name,
                     time_s,
                     throughput,
                 });
