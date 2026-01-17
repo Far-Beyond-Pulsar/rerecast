@@ -4,7 +4,7 @@ resolver = "3"
 exclude = ["./assets/", "./examples", "crates/avian_rerecast"]
 
 [workspace.package]
-authors = ["Jan Hohenheim <jan@hohenheim.ch>"]
+authors = ["Jan Hohenheim <jan@hohenheim.ch>", "Tristan J. Poland <me@tridentforu.com>"]
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/janhohenheim/rerecast"

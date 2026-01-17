@@ -1,26 +1,60 @@
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod html_generator;
+
 #[derive(Debug, Deserialize)]
 struct Estimate {
     point_estimate: f64,
+    standard_error: f64,
+    confidence_interval: ConfidenceInterval,
+}
+
+#[derive(Debug, Deserialize)]
+struct ConfidenceInterval {
+    lower_bound: f64,
+    upper_bound: f64,
+    confidence_level: f64,
 }
 
 #[derive(Debug, Deserialize)]
 struct BenchmarkData {
     mean: Estimate,
+    median: Estimate,
+    std_dev: Estimate,
+    slope: Option<Estimate>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize)]
 struct BenchmarkResult {
     name: String,
     group: String,
     benchmark: String,
     time_s: f64,
+    time_std_dev: f64,
+    time_ci_lower: f64,
+    time_ci_upper: f64,
     throughput: f64,
+    median_time_s: f64,
+}
+
+#[derive(Debug, Serialize)]
+struct GroupedResults {
+    group_name: String,
+    results: Vec<BenchmarkResult>,
+}
+
+#[derive(Debug, Serialize)]
+struct Statistics {
+    min: f64,
+    max: f64,
+    mean: f64,
+    median: f64,
+    std_dev: f64,
+    coefficient_variation: f64,
 }
 
 fn run_benchmarks() -> Result<()> {
@@ -64,7 +98,6 @@ fn find_criterion_dir() -> Result<PathBuf> {
 
 fn parse_benchmark_results(criterion_dir: &Path) -> Result<Vec<BenchmarkResult>> {
     let mut results = Vec::new();
-    let triangles = 80_000.0;
 
     // Scan all benchmark groups
     for entry in fs::read_dir(criterion_dir)? {
@@ -93,7 +126,15 @@ fn parse_benchmark_results(criterion_dir: &Path) -> Result<Vec<BenchmarkResult>>
                 let data = fs::read_to_string(&estimate_file)?;
                 let bench_data: BenchmarkData = serde_json::from_str(&data)?;
 
+                // Convert nanoseconds to seconds
                 let time_s = bench_data.mean.point_estimate / 1_000_000_000.0;
+                let time_std_dev = bench_data.std_dev.point_estimate / 1_000_000_000.0;
+                let time_ci_lower = bench_data.mean.confidence_interval.lower_bound / 1_000_000_000.0;
+                let time_ci_upper = bench_data.mean.confidence_interval.upper_bound / 1_000_000_000.0;
+                let median_time_s = bench_data.median.point_estimate / 1_000_000_000.0;
+
+                // Extract triangle count from benchmark name if available
+                let triangles = extract_triangle_count(&bench_name).unwrap_or(80_000.0);
                 let throughput = (triangles / time_s) / 1000.0; // K tri/s
 
                 results.push(BenchmarkResult {
@@ -101,13 +142,91 @@ fn parse_benchmark_results(criterion_dir: &Path) -> Result<Vec<BenchmarkResult>>
                     group: group_name.clone(),
                     benchmark: bench_name,
                     time_s,
+                    time_std_dev,
+                    time_ci_lower,
+                    time_ci_upper,
                     throughput,
+                    median_time_s,
                 });
             }
         }
     }
 
     Ok(results)
+}
+
+fn extract_triangle_count(benchmark_name: &str) -> Option<f64> {
+    // Map benchmark names to approximate triangle counts
+    if benchmark_name.contains("100x100") {
+        Some(10_000.0)
+    } else if benchmark_name.contains("200x200") {
+        Some(40_000.0)
+    } else if benchmark_name.contains("300x300") {
+        Some(90_000.0)
+    } else if benchmark_name.contains("400x400") {
+        Some(160_000.0)
+    } else if benchmark_name.contains("500x500") {
+        Some(80_000.0) // Based on actual test
+    } else if benchmark_name.contains("600x600") {
+        Some(360_000.0)
+    } else if benchmark_name.contains("1000x1000") {
+        Some(1_000_000.0)
+    } else if benchmark_name.contains("2000x2000") {
+        Some(4_000_000.0)
+    } else if benchmark_name.contains("single_mesh") {
+        Some(80_000.0)
+    } else if benchmark_name.contains("tiled") {
+        Some(80_000.0)
+    } else {
+        None
+    }
+}
+
+fn group_results(results: &[BenchmarkResult]) -> Vec<GroupedResults> {
+    let mut groups = std::collections::HashMap::new();
+    
+    for result in results {
+        groups.entry(result.group.clone())
+            .or_insert_with(Vec::new)
+            .push(result.clone());
+    }
+    
+    groups.into_iter()
+        .map(|(group_name, mut results)| {
+            // Sort by benchmark name for consistent ordering
+            results.sort_by(|a, b| a.benchmark.cmp(&b.benchmark));
+            GroupedResults { group_name, results }
+        })
+        .collect()
+}
+
+fn calculate_statistics(values: &[f64]) -> Statistics {
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    
+    let min = sorted.first().copied().unwrap_or(0.0);
+    let max = sorted.last().copied().unwrap_or(0.0);
+    let mean = sorted.iter().sum::<f64>() / sorted.len() as f64;
+    let median = if sorted.len() % 2 == 0 {
+        (sorted[sorted.len() / 2 - 1] + sorted[sorted.len() / 2]) / 2.0
+    } else {
+        sorted[sorted.len() / 2]
+    };
+    
+    let variance = sorted.iter()
+        .map(|x| (x - mean).powi(2))
+        .sum::<f64>() / sorted.len() as f64;
+    let std_dev = variance.sqrt();
+    let coefficient_variation = (std_dev / mean) * 100.0;
+    
+    Statistics {
+        min,
+        max,
+        mean,
+        median,
+        std_dev,
+        coefficient_variation,
+    }
 }
 
 fn generate_html(results: &[BenchmarkResult]) -> String {
@@ -509,8 +628,10 @@ fn main() -> Result<()> {
     }
 
     // Step 4: Generate HTML
-    println!("\n📝 Generating HTML report with charts...");
-    let html = generate_html(&results);
+    println!("\n📝 Generating comprehensive HTML report with all charts...");
+    
+    let grouped = group_results(&results);
+    let html = html_generator::generate_comprehensive_html(&results, &grouped);
 
     // Always write to workspace root docs directory
     // We're running from crates/benchmark-report, so ../../docs is workspace root
