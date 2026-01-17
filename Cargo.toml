@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/rerecast", "crates/test_utils"]
+members = ["crates/rerecast", "crates/test_utils", "crates/benchmark-report"]
 resolver = "3"
 exclude = ["./assets/", "./examples", "crates/avian_rerecast"]
 

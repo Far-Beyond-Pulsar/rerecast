@@ -18,6 +18,7 @@ glam = { workspace = true }
 bitflags = { workspace = true }
 tracing = { workspace = true, optional = true }
 libm = { workspace = true, optional = true }
+rayon = { version = "1.10", optional = true }
 
 serde = { workspace = true, optional = true, features = ["derive"] }
 
@@ -25,11 +26,15 @@ serde = { workspace = true, optional = true, features = ["derive"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 test_utils = { workspace = true }
+criterion = { version = "0.5", features = ["html_reports"] }
+benchmark-report = { path = "../benchmark-report" }
 
 [features]
-default = ["std", "tracing"]
+default = ["std", "tracing", "parallel"]
 # Recommended defaults for no_std applications
 default_no_std = ["libm"]
+# Enable parallel tile-based processing
+parallel = ["dep:rayon", "std"]
 # Use std if available, but fall back to libm if not
 nostd-libm = ["dep:libm", "glam/nostd-libm"]
 # use libm for no_std support and cross-platform determinism
@@ -49,6 +54,10 @@ serialize = ["dep:serde", "glam/serde", "slotmap/serde", "bitflags/serde"]
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "tiled_vs_single"
+harness = false
 
 [package.metadata.docs.rs]
 rustdoc-args = ["-Zunstable-options", "--generate-link-to-definition"]
