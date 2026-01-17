@@ -8,9 +8,6 @@ use core::{
 use glam::{U16Vec3, Vec2, Vec3, Vec3A, Vec3Swizzles as _, u16vec3};
 use thiserror::Error;
 
-#[cfg(feature = "parallel")]
-use rayon::prelude::*;
-
 use crate::{
     Aabb3d, CompactHeightfield, PolygonNavmesh, RegionId,
     math::{
@@ -153,11 +150,19 @@ impl DetailNavmesh {
         let border_size = mesh.border_size;
         let height_search_radius = 1.max(ceil(mesh.max_edge_error) as u32);
 
+        let mut edges = Vec::with_capacity(64 / 4);
+        let mut tris = Vec::with_capacity((512 / 4) * 3);
+        let mut flags = Vec::with_capacity(512 / 4);
+        let mut arr = Vec::with_capacity(512 / 3);
+        let mut samples = Vec::with_capacity(512 / 4);
+        let mut verts = [Vec3A::default(); 256];
+        let mut hp = HeightPatch::default();
         let mut poly_vert_count = 0;
         let mut maxhw = 0;
         let mut maxhh = 0;
 
         let mut bounds = vec![Bounds::default(); mesh.polygon_count()];
+        let mut poly = vec![Vec3A::default(); nvp];
 
         // Find max size for a polygon area.
         for (i, b) in bounds.iter_mut().enumerate() {
@@ -193,133 +198,16 @@ impl DetailNavmesh {
             maxhw = maxhw.max(*xmax - *xmin);
             maxhh = maxhh.max(*zmax - *zmin);
         }
+        hp.data = vec![0; maxhw as usize * maxhh as usize];
         dmesh.meshes = vec![SubMesh::default(); mesh.polygon_count()];
 
-        #[cfg(feature = "parallel")]
-        {
-            // Parallel version: process each polygon independently
-            struct PolyResult {
-                vertices: Vec<Vec3>,
-                triangles: Vec<[u8; 3]>,
-                triangle_flags: Vec<u8>,
-            }
+        let mut vcap = poly_vert_count + poly_vert_count / 2;
+        let mut tcap = vcap * 2;
 
-            let poly_results: Vec<PolyResult> = bounds
-                .par_iter()
-                .enumerate()
-                .take(mesh.polygon_count())
-                .map(|(i, bounds_i)| {
-                    let p = &mesh.polygons[i * nvp..];
-                    let mut poly_local = vec![Vec3A::default(); nvp];
-                    let mut verts_local = [Vec3A::default(); 256];
-                    let mut hp_local = HeightPatch {
-                        data: vec![0; maxhw as usize * maxhh as usize],
-                        xmin: bounds_i.xmin,
-                        zmin: bounds_i.zmin,
-                        width: bounds_i.width(),
-                        height: bounds_i.height(),
-                    };
-                    let mut edges_local = Vec::with_capacity(64 / 4);
-                    let mut tris_local = Vec::with_capacity((512 / 4) * 3);
-                    let mut flags_local = Vec::with_capacity(512 / 4);
-                    let mut arr_local = Vec::with_capacity(512 / 3);
-                    let mut samples_local = Vec::with_capacity(512 / 4);
+        dmesh.vertices = Vec::with_capacity(vcap);
+        dmesh.triangles = Vec::with_capacity(tcap);
 
-                    // Store polygon vertices
-                    let mut npoly = 0;
-                    for j in 0..nvp {
-                        if p[j] == PolygonNavmesh::NO_INDEX {
-                            break;
-                        }
-                        let v = mesh.vertices[p[j] as usize].as_vec3();
-                        poly_local[j].x = v.x * cs;
-                        poly_local[j].y = v.y * ch;
-                        poly_local[j].z = v.z * cs;
-                        npoly += 1;
-                    }
-
-                    // Get height data
-                    hp_local.get_height_data(
-                        chf,
-                        p,
-                        npoly,
-                        &verts_local,
-                        border_size,
-                        &mut arr_local,
-                        mesh.regions[i],
-                    );
-
-                    // Build detail mesh
-                    let mut nverts = 0;
-                    build_poly_detail(
-                        &poly_local,
-                        npoly,
-                        sample_distance,
-                        sample_max_error,
-                        height_search_radius,
-                        chf,
-                        &hp_local,
-                        &mut verts_local,
-                        &mut nverts,
-                        &mut tris_local,
-                        &mut flags_local,
-                        &mut edges_local,
-                        &mut samples_local,
-                    )
-                    .expect("build_poly_detail failed");
-
-                    // Move to world space
-                    for vert in &mut verts_local[..nverts] {
-                        *vert += orig;
-                        vert.y += chf.cell_height;
-                    }
-
-                    PolyResult {
-                        vertices: verts_local[..nverts].iter().map(|v| Vec3::from(*v)).collect(),
-                        triangles: tris_local.iter().map(|t| [t[0], t[1], t[2]]).collect(),
-                        triangle_flags: flags_local.clone(),
-                    }
-                })
-                .collect();
-
-            // Accumulate results
-            let mut vertex_offset = 0u32;
-            let mut triangle_offset = 0u32;
-
-            for (i, result) in poly_results.into_iter().enumerate() {
-                dmesh.meshes[i].base_vertex_index = vertex_offset;
-                dmesh.meshes[i].vertex_count = result.vertices.len() as u32;
-                dmesh.meshes[i].base_triangle_index = triangle_offset;
-                dmesh.meshes[i].triangle_count = result.triangles.len() as u32;
-
-                dmesh.vertices.extend(result.vertices);
-                dmesh.triangles.extend(result.triangles);
-                dmesh.triangle_flags.extend(result.triangle_flags);
-
-                vertex_offset += dmesh.meshes[i].vertex_count;
-                triangle_offset += dmesh.meshes[i].triangle_count;
-            }
-        }
-
-        #[cfg(not(feature = "parallel"))]
-        {
-            // Sequential version (original code)
-            let mut edges = Vec::with_capacity(64 / 4);
-            let mut tris = Vec::with_capacity((512 / 4) * 3);
-            let mut flags = Vec::with_capacity(512 / 4);
-            let mut arr = Vec::with_capacity(512 / 3);
-            let mut samples = Vec::with_capacity(512 / 4);
-            let mut verts = [Vec3A::default(); 256];
-            let mut hp = HeightPatch::default();
-            let mut poly = vec![Vec3A::default(); nvp];
-
-            let mut vcap = poly_vert_count + poly_vert_count / 2;
-            let mut tcap = vcap * 2;
-
-            dmesh.vertices = Vec::with_capacity(vcap);
-            dmesh.triangles = Vec::with_capacity(tcap);
-
-            for (i, bounds_i) in bounds.iter().enumerate().take(mesh.polygon_count()) {
+        for (i, bounds_i) in bounds.iter().enumerate().take(mesh.polygon_count()) {
             let p = &mesh.polygons[i * nvp..];
 
             // Store polygon vertices for processing.
@@ -409,7 +297,6 @@ impl DetailNavmesh {
             }
             for flag in &flags {
                 dmesh.triangle_flags.push(*flag);
-            }
             }
         }
 

@@ -18,7 +18,6 @@ glam = { workspace = true }
 bitflags = { workspace = true }
 tracing = { workspace = true, optional = true }
 libm = { workspace = true, optional = true }
-rayon = { version = "1.10", optional = true }
 
 serde = { workspace = true, optional = true, features = ["derive"] }
 
@@ -28,7 +27,7 @@ serde_json = { workspace = true }
 test_utils = { workspace = true }
 
 [features]
-default = ["std", "tracing", "parallel"]
+default = ["std", "tracing"]
 # Recommended defaults for no_std applications
 default_no_std = ["libm"]
 # Use std if available, but fall back to libm if not
@@ -44,8 +43,6 @@ std = [
     "anyhow/std",
     "thiserror/std",
 ]
-# Enable parallel processing with rayon (requires std)
-parallel = ["dep:rayon", "std"]
 # Note: tracing works on all no_std platforms that support atomics
 tracing = ["dep:tracing"]
 serialize = ["dep:serde", "glam/serde", "slotmap/serde", "bitflags/serde"]
